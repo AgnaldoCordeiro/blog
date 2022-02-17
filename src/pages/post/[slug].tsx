@@ -14,6 +14,7 @@ import styles from './post.module.scss';
 
 import Header from '../../components/Header';
 import { formatDate } from '../../utils';
+import NavigationSection from '../../components/NavigationSection';
 
 interface Post {
   first_publication_date: string | null;
@@ -35,9 +36,26 @@ interface Post {
 
 interface PostProps {
   post: Post;
+  navigationItems?: {
+    nextPost?: {
+      uid: string;
+      data: {
+        title: string;
+      };
+    };
+    previousPost?: {
+      uid: string;
+      data: {
+        title: string;
+      };
+    };
+  };
 }
 
-export default function Post({ post }: PostProps) {
+export default function Post({
+  post,
+  navigationItems,
+}: PostProps): JSX.Element {
   const router = useRouter();
 
   if (router.isFallback) {
@@ -99,6 +117,28 @@ export default function Post({ post }: PostProps) {
             );
           })}
         </article>
+
+        <NavigationSection
+          nextPost={navigationItems.nextPost}
+          previousPost={navigationItems.previousPost}
+        />
+
+        <section
+          ref={elem => {
+            if (!elem || elem.childNodes.length) {
+              return;
+            }
+            const scriptElem = document.createElement('script');
+            scriptElem.src = 'https://utteranc.es/client.js';
+            scriptElem.async = true;
+            scriptElem.crossOrigin = 'anonymous';
+            scriptElem.setAttribute('repo', 'AgnaldoCordeiro/blog');
+            scriptElem.setAttribute('issue-term', 'pathname');
+            scriptElem.setAttribute('label', 'blog');
+            scriptElem.setAttribute('theme', 'github-dark');
+            elem.appendChild(scriptElem);
+          }}
+        />
       </main>
     </>
   );
@@ -106,51 +146,84 @@ export default function Post({ post }: PostProps) {
 
 export const getStaticPaths: GetStaticPaths = async () => {
   const prismic = getPrismicClient();
-  const posts = await prismic.query([
-    Prismic.Predicates.at('document.type', 'posts'),
-  ]);
+  const postResponse = await prismic.query(
+    [Prismic.predicates.at('document.type', 'post')],
+    {
+      fetch: ['post.title', 'post.subtitle', 'post.author'],
+    }
+  );
 
-  const paths = posts.results.map(post => {
+  const paths = postResponse.results.map(post => ({
+    params: {
+      slug: post.uid,
+    },
+  }));
+
+  return {
+    paths,
+    fallback: 'blocking',
+  };
+};
+
+export const getStaticProps: GetStaticProps = async ({ params }) => {
+  const prismic = getPrismicClient();
+  const { slug } = params;
+
+  const response = await prismic.getByUID('posts', String(slug), {});
+
+  const postsResponse = await prismic.query(
+    [Prismic.predicates.at('document.type', 'posts')],
+    {
+      fetch: ['posts.title', 'posts.subtitle', 'posts.author'],
+    }
+  );
+
+  const results = postsResponse.results.map(post => {
     return {
-      params: {
-        slug: post.uid,
+      uid: post.uid,
+      data: {
+        title: post.data.title,
       },
     };
   });
 
-  return {
-    paths,
-    fallback: true,
-  };
-};
+  const currentPostPositionIndex = results.findIndex(
+    post => post.uid === response.uid
+  );
 
-export const getStaticProps: GetStaticProps = async context => {
-  const prismic = getPrismicClient();
-  const { slug } = context.params;
-  const response = await prismic.getByUID('posts', String(slug), {});
+  const otherPosts = results.filter(
+    (post, index) =>
+      index === currentPostPositionIndex + 1 ||
+      index === currentPostPositionIndex - 1
+  );
+
+  const navigationItems = {
+    nextPost: otherPosts[0] ?? null,
+    previousPost: otherPosts[1] ?? null,
+  };
 
   const post = {
-    uid: response.uid,
-    first_publication_date: response.first_publication_date,
     data: {
+      author: response.data.author,
       title: response.data.title,
       subtitle: response.data.subtitle,
+      content: response.data.content.map(item => ({
+        heading: item.heading,
+        body: [...item.body],
+      })),
       banner: {
-        url: response.data.banner.url,
+        url: response.data.banner.url ?? null,
       },
-      author: response.data.author,
-      content: response.data.content.map(content => {
-        return {
-          heading: content.heading,
-          body: [...content.body],
-        };
-      }),
     },
+    uid: response.uid,
+    first_publication_date: response.first_publication_date,
   };
 
   return {
     props: {
       post,
+      navigationItems,
     },
+    revalidate: 60 * 30,
   };
 };
